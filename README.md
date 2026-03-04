@@ -1,6 +1,6 @@
 # Feline
 
-Real-time voice and multimodal AI pipelines for Elixir, inspired by [pipecat](https://github.com/pipecat-ai/pipecat).
+Real-time voice and multimodal AI pipelines for Elixir, inspired by [pipecat](https://github.com/pipecat-ai/pipecat). See the [live voice demo](#live-voice-demo) to try it out.
 
 > **Disclaimer:** Feline is an experiment in porting pipecat to Elixir using only LLMs (no human-written code). It is not reliable yet — expect rough edges, missing features, and untested paths. Use at your own risk.
 
@@ -38,9 +38,9 @@ end
 
 ```elixir
 pipeline = Feline.Pipeline.new([
-  {MyApp.STT, api_key: "..."},
-  {MyApp.LLM, api_key: "..."},
-  {MyApp.TTS, api_key: "..."}
+  {Feline.Services.Deepgram.STT, api_key: "...", sample_rate: 16_000},
+  {Feline.Services.OpenAI.LLM, api_key: "...", model: "gpt-4.1-mini"},
+  {Feline.Services.ElevenLabs.TTS, api_key: "...", voice_id: "..."}
 ])
 
 Feline.Pipeline.Runner.run(pipeline)

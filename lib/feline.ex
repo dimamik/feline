@@ -15,9 +15,9 @@ defmodule Feline do
   ## Quick Start
 
       pipeline = Feline.Pipeline.new([
-        {MyApp.STT, api_key: "..."},
-        {MyApp.LLM, api_key: "..."},
-        {MyApp.TTS, api_key: "..."}
+        {Feline.Services.Deepgram.STT, api_key: "...", sample_rate: 16_000},
+        {Feline.Services.OpenAI.LLM, api_key: "...", model: "gpt-4.1-mini"},
+        {Feline.Services.ElevenLabs.TTS, api_key: "...", voice_id: "..."}
       ])
 
       Feline.Pipeline.Runner.run(pipeline)
