@@ -1,17 +1,17 @@
 defmodule Feline.Frames.TextFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :text, metadata: %{}]
 end
 
 defmodule Feline.Frames.LLMTextFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :text, metadata: %{}]
 end
 
 defmodule Feline.Frames.OutputAudioRawFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
 
   defstruct [
@@ -25,7 +25,7 @@ defmodule Feline.Frames.OutputAudioRawFrame do
 end
 
 defmodule Feline.Frames.TTSAudioRawFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
 
   defstruct [
@@ -40,7 +40,7 @@ defmodule Feline.Frames.TTSAudioRawFrame do
 end
 
 defmodule Feline.Frames.TranscriptionFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
 
   defstruct [
@@ -53,7 +53,7 @@ defmodule Feline.Frames.TranscriptionFrame do
 end
 
 defmodule Feline.Frames.InterimTranscriptionFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
 
   defstruct [
@@ -66,25 +66,25 @@ defmodule Feline.Frames.InterimTranscriptionFrame do
 end
 
 defmodule Feline.Frames.LLMRunFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, metadata: %{}]
 end
 
 defmodule Feline.Frames.LLMContextFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :context, metadata: %{}]
 end
 
 defmodule Feline.Frames.LLMMessagesAppendFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :messages, metadata: %{}]
 end
 
 defmodule Feline.Frames.FunctionCallInProgressFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
 
   defstruct [
@@ -98,7 +98,7 @@ defmodule Feline.Frames.FunctionCallInProgressFrame do
 end
 
 defmodule Feline.Frames.FunctionCallResultFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data, uninterruptible: true
 
   defstruct [
@@ -112,31 +112,31 @@ defmodule Feline.Frames.FunctionCallResultFrame do
 end
 
 defmodule Feline.Frames.TTSSpeakFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :text, metadata: %{}]
 end
 
 defmodule Feline.Frames.OutputImageRawFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :image, :width, :height, metadata: %{}, format: "RGB"]
 end
 
 defmodule Feline.Frames.SpriteFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :images, metadata: %{}]
 end
 
 defmodule Feline.Frames.VisionTextFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :text, :image, :width, :height, metadata: %{}, format: "RGB"]
 end
 
 defmodule Feline.Frames.InputAudioRawFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
 
   defstruct [
@@ -150,49 +150,49 @@ defmodule Feline.Frames.InputAudioRawFrame do
 end
 
 defmodule Feline.Frames.UserStartedSpeakingFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, metadata: %{}]
 end
 
 defmodule Feline.Frames.UserStoppedSpeakingFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, metadata: %{}]
 end
 
 defmodule Feline.Frames.BotStartedSpeakingFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, metadata: %{}]
 end
 
 defmodule Feline.Frames.BotStoppedSpeakingFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, metadata: %{}]
 end
 
 defmodule Feline.Frames.InputImageRawFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :image, :width, :height, metadata: %{}, format: "RGB"]
 end
 
 defmodule Feline.Frames.UserImageRawFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :image, :width, :height, :user_id, metadata: %{}, format: "RGB"]
 end
 
 defmodule Feline.Frames.InputTransportMessageFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :payload, metadata: %{}]
 end
 
 defmodule Feline.Frames.OutputTransportMessageFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :data
   defstruct [:id, :pts, :payload, metadata: %{}]
 end

@@ -7,6 +7,7 @@ defmodule Feline.Services.OpenAI.StreamingLLM do
   use Feline.Processor
 
   alias Feline.Frames.{
+    ErrorFrame,
     InterruptionFrame,
     LLMContextFrame,
     LLMTextFrame,
@@ -129,7 +130,9 @@ defmodule Feline.Services.OpenAI.StreamingLLM do
       {_ref, :done} ->
         tool_calls_acc
     after
-      30_000 -> tool_calls_acc
+      30_000 ->
+        push_fn.(%ErrorFrame{id: make_ref(), message: "SSE stream timed out after 30s"}, :upstream)
+        tool_calls_acc
     end
   end
 

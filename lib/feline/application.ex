@@ -7,13 +7,7 @@ defmodule Feline.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      # Starts a worker by calling: Feline.Worker.start_link(arg)
-      # {Feline.Worker, arg}
-    ]
-
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
+    children = []
     opts = [strategy: :one_for_one, name: Feline.Supervisor]
     Supervisor.start_link(children, opts)
   end

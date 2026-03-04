@@ -16,7 +16,8 @@ defmodule Feline.MixProject do
       docs: [
         main: "readme",
         extras: ["README.md", "CHANGELOG.md", "guides/live-voice-demo.md"],
-        groups_for_extras: [Guides: ~r/guides\/.*/]
+        groups_for_extras: [Guides: ~r/guides\/.*/],
+        assets: %{"assets" => "assets"}
       ]
     ]
   end
@@ -40,7 +41,8 @@ defmodule Feline.MixProject do
         "GitHub" => "https://github.com/dimamik/feline",
         "pipecat" => "https://github.com/pipecat-ai/pipecat"
       },
-      maintainers: ["Dima Mikielewicz"]
+      maintainers: ["Dima Mikielewicz"],
+      files: ~w(lib assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md)
     ]
   end
 

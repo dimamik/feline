@@ -2,6 +2,8 @@
 
 Real-time voice and multimodal AI pipelines for Elixir, inspired by [pipecat](https://github.com/pipecat-ai/pipecat). See the [live voice demo](#live-voice-demo) to try it out.
 
+[![Demo](assets/demo-thumbnail.png)](https://youtu.be/AQZARTkHajI)
+
 > **Disclaimer:** Feline is an experiment in porting pipecat to Elixir using only LLMs (no human-written code). It is not reliable yet — expect rough edges, missing features, and untested paths. Use at your own risk.
 
 Feline reimplements pipecat's core architecture using BEAM/OTP primitives — each processor is a GenServer, pipelines are supervised process trees, and frame priority is handled through selective receive rather than async queues.
@@ -68,22 +70,22 @@ Feline.Pipeline.Runner.run(pipeline)
 
 ## Key Differences from Python Pipecat
 
-| Python pipecat | Feline |
-|---|---|
-| `asyncio.PriorityQueue` | Selective receive on message tags |
-| `isinstance()` dispatch | Pattern matching on structs |
-| `prev`/`next` object pointers | PIDs in GenServer state |
-| `asyncio.Task` management | OTP `DynamicSupervisor` |
-| Single-threaded concurrency | True parallel BEAM processes |
-| `try/except` error handling | `ErrorFrame` upstream + supervisor restart |
+| Python pipecat                | Feline                                     |
+| ----------------------------- | ------------------------------------------ |
+| `asyncio.PriorityQueue`       | Selective receive on message tags          |
+| `isinstance()` dispatch       | Pattern matching on structs                |
+| `prev`/`next` object pointers | PIDs in GenServer state                    |
+| `asyncio.Task` management     | OTP `DynamicSupervisor`                    |
+| Single-threaded concurrency   | True parallel BEAM processes               |
+| `try/except` error handling   | `ErrorFrame` upstream + supervisor restart |
 
 ## Built-in Services
 
-| Service | Module | Streaming |
-|---|---|---|
-| OpenAI Chat Completions | `Feline.Services.OpenAI.LLM` | `Feline.Services.OpenAI.StreamingLLM` |
-| Deepgram STT | `Feline.Services.Deepgram.STT` | `Feline.Services.Deepgram.StreamingSTT` |
-| ElevenLabs TTS | `Feline.Services.ElevenLabs.TTS` | `Feline.Services.ElevenLabs.StreamingTTS` |
+| Service                 | Module                           | Streaming                                 |
+| ----------------------- | -------------------------------- | ----------------------------------------- |
+| OpenAI Chat Completions | `Feline.Services.OpenAI.LLM`     | `Feline.Services.OpenAI.StreamingLLM`     |
+| Deepgram STT            | `Feline.Services.Deepgram.STT`   | `Feline.Services.Deepgram.StreamingSTT`   |
+| ElevenLabs TTS          | `Feline.Services.ElevenLabs.TTS` | `Feline.Services.ElevenLabs.StreamingTTS` |
 
 ## Additional Features
 
@@ -127,10 +129,10 @@ Mic (ffmpeg) → VAD → Deepgram STT → Context Aggregation → OpenAI LLM →
 ```
 
 Features working in the demo:
+
 - Streaming speech-to-text and text-to-speech
 - Streaming LLM token output (printed to console as it arrives)
 - Echo suppression (mic is muted while bot speaks)
-- User interruption (speak while bot is talking to cut it off)
 
 ## Installation
 

@@ -1,11 +1,10 @@
 defmodule Feline.Frames.StartFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :system
 
   defstruct [
     :id,
     :pts,
-    :observer,
     metadata: %{},
     audio_in_sample_rate: 16_000,
     audio_out_sample_rate: 24_000,
@@ -15,13 +14,13 @@ defmodule Feline.Frames.StartFrame do
 end
 
 defmodule Feline.Frames.CancelFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :system
   defstruct [:id, :pts, metadata: %{}]
 end
 
 defmodule Feline.Frames.ErrorFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :system
 
   defstruct [
@@ -36,13 +35,13 @@ defmodule Feline.Frames.ErrorFrame do
 end
 
 defmodule Feline.Frames.InterruptionFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :system
   defstruct [:id, :pts, :ref, :caller, metadata: %{}]
 end
 
 defmodule Feline.Frames.MetricsFrame do
-  false
+  @moduledoc false
   use Feline.Frame, category: :system
   defstruct [:id, :pts, :data, metadata: %{}]
 end

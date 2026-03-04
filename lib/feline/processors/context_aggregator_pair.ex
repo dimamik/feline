@@ -35,7 +35,9 @@ defmodule Feline.Processors.ContextAggregatorPair do
   end
 
   def append_message(agent, message) do
-    Agent.update(agent, &Context.append_message(&1, message))
-    Agent.get(agent, & &1)
+    Agent.get_and_update(agent, fn ctx ->
+      updated = Context.append_message(ctx, message)
+      {updated, updated}
+    end)
   end
 end
