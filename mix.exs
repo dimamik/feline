@@ -1,10 +1,12 @@
 defmodule Feline.MixProject do
   use Mix.Project
 
+  @version "0.1.0-rc.1"
+
   def project do
     [
       app: :feline,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -13,6 +15,7 @@ defmodule Feline.MixProject do
       package: package(),
       source_url: "https://github.com/dimamik/feline",
       homepage_url: "https://github.com/dimamik/feline",
+      aliases: aliases(),
       docs: [
         main: "readme",
         extras: ["README.md", "CHANGELOG.md", "guides/live-voice-demo.md"],
@@ -43,6 +46,17 @@ defmodule Feline.MixProject do
       },
       maintainers: ["Dima Mikielewicz"],
       files: ~w(lib assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md)
+    ]
+  end
+
+  defp aliases do
+    [
+      release: [
+        "cmd git tag v#{@version}",
+        "cmd git push",
+        "cmd git push --tags",
+        "hex.publish --yes"
+      ]
     ]
   end
 
