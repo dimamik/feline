@@ -1,7 +1,7 @@
 defmodule Feline.Transports.Boombox.CaptionSender do
   @moduledoc """
-  Sends sentence text to the browser as captions when each sentence
-  is ready for TTS. Placed just before the TTS processor.
+  Sends sentence captions directly to the browser via the text WebSocket.
+  Each sentence is displayed as soon as it's assembled, before TTS.
   """
   use Feline.Processor
 

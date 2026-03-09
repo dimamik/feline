@@ -2,7 +2,8 @@ defmodule Feline.Transports.Boombox.AudioOutput do
   @moduledoc """
   Processor that sends TTS audio to a Boombox writer for WebRTC output.
 
-  Replaces `AudioPlayer` when using Boombox WebRTC transport.
+  Uses async message-based writing to avoid blocking the processor
+  GenServer on Boombox's demand-based back-pressure.
   """
   use Feline.Processor
 
@@ -19,7 +20,7 @@ defmodule Feline.Transports.Boombox.AudioOutput do
   def init(opts) do
     {:ok,
      %{
-       writer: Keyword.fetch!(opts, :writer),
+       writer_pid: Keyword.fetch!(opts, :writer).server_reference,
        sample_rate: Keyword.get(opts, :sample_rate, 24_000),
        speaking: false,
        pts: 0
@@ -47,7 +48,7 @@ defmodule Feline.Transports.Boombox.AudioOutput do
       }
     }
 
-    Boombox.write(state.writer, packet)
+    send(state.writer_pid, {:boombox_packet, packet})
 
     duration_ms = div(byte_size(audio) * 1000, state.sample_rate * 2)
     {:push, frame, :downstream, %{state | pts: state.pts + duration_ms}}
@@ -65,7 +66,7 @@ defmodule Feline.Transports.Boombox.AudioOutput do
 
   def handle_frame(%EndFrame{} = frame, direction, push_fn, state) do
     state = stop_speaking(state, push_fn)
-    Boombox.close(state.writer)
+    send(state.writer_pid, :boombox_close)
     {:push, frame, direction, state}
   end
 
@@ -79,5 +80,4 @@ defmodule Feline.Transports.Boombox.AudioOutput do
     push_fn.(%BotStoppedSpeakingFrame{id: make_ref()}, :upstream)
     %{state | speaking: false}
   end
-
 end

@@ -89,6 +89,7 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
     # Build Feline pipeline
     context = Context.new([%{"role" => "system", "content" => system_prompt}])
     {:ok, pair} = ContextAggregatorPair.start(context)
+
     pipeline =
       Pipeline.new([
         {Feline.Processors.VADProcessor, start_secs: 0.2, stop_secs: 0.8},
@@ -130,7 +131,7 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
   end
 
   defp start_boombox(:writer, signaling) do
-    pid = start_boombox_server([
+    pid = start_boombox_server(:messages, [
       input: {:writer, audio: :binary, video: false},
       output: {:webrtc, signaling}
     ])
@@ -141,12 +142,12 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
   # Starts a Boombox.Server and sends {:run, opts} via the message API
   # to avoid the default 5s GenServer.call timeout. Waits indefinitely
   # for WebRTC negotiation to complete (browser must connect first).
-  defp start_boombox_server(boombox_opts) do
+  defp start_boombox_server(communication_medium \\ :calls, boombox_opts) do
     {:ok, pid} =
       Boombox.Server.start(
         packet_serialization: false,
         stop_application: false,
-        communication_medium: :calls
+        communication_medium: communication_medium
       )
 
     send(pid, {:call, self(), {:run, boombox_opts}})

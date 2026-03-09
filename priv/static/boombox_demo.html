@@ -52,17 +52,20 @@
       vertical-align: middle;
     }
     .indicator.active { background: #4caf50; }
-    #transcript {
-      margin-top: 1.5rem;
-      text-align: left;
-      max-height: 300px;
-      overflow-y: auto;
-      font-size: 0.9rem;
-      line-height: 1.6;
+    #captions {
+      margin-top: 2rem;
+      text-align: center;
+      font-size: 1.2rem;
+      line-height: 1.8;
+      color: #e0e0e0;
+      min-height: 3.5em;
     }
-    .msg { margin-bottom: 0.4rem; }
-    .msg.bot { color: #81c784; }
-    .label { font-weight: bold; margin-right: 0.3rem; }
+    #captions .line {
+      display: block;
+      opacity: 0.4;
+      transition: opacity 0.3s;
+    }
+    #captions .line.current { opacity: 1; }
   </style>
 </head>
 <body>
@@ -76,7 +79,7 @@
       &nbsp;&nbsp;
       <span class="indicator" id="spkIndicator"></span> Speaker
     </div>
-    <div id="transcript"></div>
+    <div id="captions"></div>
     <audio id="audioOut" autoplay></audio>
   </div>
 
@@ -87,9 +90,11 @@
     const micInd = document.getElementById('micIndicator');
     const spkInd = document.getElementById('spkIndicator');
     const audioOut = document.getElementById('audioOut');
-    const transcript = document.getElementById('transcript');
+    const captionsEl = document.getElementById('captions');
 
     let inputWs, outputWs, textWs, inputPc, outputPc, localStream;
+    let captionLines = [];
+    const MAX_CAPTION_LINES = 3;
 
     function setStatus(text, cls) {
       statusEl.textContent = text;
@@ -101,13 +106,12 @@
       return `${proto}//${location.host}${path}`;
     }
 
-    function addMessage(cls, label, text) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + cls;
-      div.innerHTML = `<span class="label">${label}:</span>${text}`;
-      transcript.appendChild(div);
-      transcript.scrollTop = transcript.scrollHeight;
-      return div;
+    function renderCaptions() {
+      const visible = captionLines.slice(-MAX_CAPTION_LINES);
+      const lastIdx = visible.length - 1;
+      captionsEl.innerHTML = visible.map((line, i) =>
+        `<span class="line${i === lastIdx ? ' current' : ''}">${line}</span>`
+      ).join('');
     }
 
     function setupTextWs() {
@@ -115,7 +119,9 @@
       textWs.onmessage = event => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'caption') {
-          addMessage('bot', 'Bot', msg.text);
+          captionLines.push(msg.text);
+          if (captionLines.length > MAX_CAPTION_LINES) captionLines.shift();
+          renderCaptions();
         }
       };
     }

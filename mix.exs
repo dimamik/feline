@@ -18,7 +18,7 @@ defmodule Feline.MixProject do
       aliases: aliases(),
       docs: [
         main: "readme",
-        extras: ["README.md", "CHANGELOG.md", "guides/live-voice-demo.md"],
+        extras: ["README.md", "CHANGELOG.md", "guides/live-voice-demo.md", "guides/webrtc-voice-demo.md"],
         groups_for_extras: [Guides: ~r/guides\/.*/],
         assets: %{"assets" => "assets"}
       ]
