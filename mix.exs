@@ -7,7 +7,7 @@ defmodule Feline.MixProject do
     [
       app: :feline,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: ">= 1.18.0",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -68,6 +68,7 @@ defmodule Feline.MixProject do
       {:websockex, "~> 0.4"},
       {:bandit, "~> 1.6"},
       {:websock_adapter, "~> 0.5"},
+      {:boombox, "~> 0.2", optional: true},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, ">= 0.0.0", only: [:dev, :test], runtime: false}
     ]

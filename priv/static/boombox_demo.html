@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feline Voice Assistant</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      text-align: center;
+      max-width: 500px;
+      width: 100%;
+      padding: 2rem;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #fff; }
+    .subtitle { color: #888; margin-bottom: 2rem; font-size: 0.9rem; }
+    #startBtn {
+      background: #4a90d9;
+      color: white;
+      border: none;
+      padding: 1rem 2.5rem;
+      font-size: 1.1rem;
+      border-radius: 2rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #startBtn:hover { background: #357abd; }
+    #startBtn:disabled { background: #555; cursor: not-allowed; }
+    .status {
+      margin-top: 1.5rem;
+      font-size: 0.9rem;
+      color: #aaa;
+    }
+    .status.connected { color: #4caf50; }
+    .status.error { color: #f44336; }
+    .indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #555;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .indicator.active { background: #4caf50; }
+    #transcript {
+      margin-top: 1.5rem;
+      text-align: left;
+      max-height: 300px;
+      overflow-y: auto;
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+    .msg { margin-bottom: 0.4rem; }
+    .msg.bot { color: #81c784; }
+    .label { font-weight: bold; margin-right: 0.3rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Feline Voice Assistant</h1>
+    <p class="subtitle">Browser-based voice assistant powered by Boombox WebRTC</p>
+    <button id="startBtn">Start</button>
+    <div class="status" id="status"></div>
+    <div style="margin-top: 1rem;">
+      <span class="indicator" id="micIndicator"></span> Mic
+      &nbsp;&nbsp;
+      <span class="indicator" id="spkIndicator"></span> Speaker
+    </div>
+    <div id="transcript"></div>
+    <audio id="audioOut" autoplay></audio>
+  </div>
+
+  <script>
+    const pcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    const startBtn = document.getElementById('startBtn');
+    const statusEl = document.getElementById('status');
+    const micInd = document.getElementById('micIndicator');
+    const spkInd = document.getElementById('spkIndicator');
+    const audioOut = document.getElementById('audioOut');
+    const transcript = document.getElementById('transcript');
+
+    let inputWs, outputWs, textWs, inputPc, outputPc, localStream;
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = 'status ' + (cls || '');
+    }
+
+    function wsUrl(path) {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${location.host}${path}`;
+    }
+
+    function addMessage(cls, label, text) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + cls;
+      div.innerHTML = `<span class="label">${label}:</span>${text}`;
+      transcript.appendChild(div);
+      transcript.scrollTop = transcript.scrollHeight;
+      return div;
+    }
+
+    function setupTextWs() {
+      textWs = new WebSocket(wsUrl('/ws/text'));
+      textWs.onmessage = event => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'caption') {
+          addMessage('bot', 'Bot', msg.text);
+        }
+      };
+    }
+
+    async function start() {
+      startBtn.disabled = true;
+      setStatus('Requesting microphone...');
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        setStatus('Microphone access denied', 'error');
+        startBtn.disabled = false;
+        return;
+      }
+
+      micInd.classList.add('active');
+      setStatus('Connecting...');
+
+      setupTextWs();
+
+      inputWs = new WebSocket(wsUrl('/ws/input'));
+      inputWs.onopen = () => setupInputPc();
+
+      outputWs = new WebSocket(wsUrl('/ws/output'));
+      outputWs.onopen = () => setupOutputPc();
+    }
+
+    function setupInputPc() {
+      inputPc = new RTCPeerConnection(pcConfig);
+
+      inputPc.onicecandidate = event => {
+        if (event.candidate) {
+          inputWs.send(JSON.stringify({ type: 'ice_candidate', data: event.candidate }));
+        }
+      };
+
+      inputPc.onconnectionstatechange = () => {
+        if (inputPc.connectionState === 'connected') {
+          micInd.classList.add('active');
+          checkBothConnected();
+        } else if (inputPc.connectionState === 'disconnected' || inputPc.connectionState === 'failed') {
+          setStatus('Input disconnected');
+          cleanup();
+        }
+      };
+
+      for (const track of localStream.getTracks()) {
+        inputPc.addTrack(track, localStream);
+      }
+
+      inputWs.onmessage = async event => {
+        const { type, data } = JSON.parse(event.data);
+        if (type === 'sdp_answer') {
+          await inputPc.setRemoteDescription(data);
+        } else if (type === 'ice_candidate') {
+          await inputPc.addIceCandidate(data);
+        }
+      };
+
+      inputPc.createOffer().then(async offer => {
+        await inputPc.setLocalDescription(offer);
+        inputWs.send(JSON.stringify({ type: 'sdp_offer', data: offer }));
+      });
+    }
+
+    function setupOutputPc() {
+      outputPc = new RTCPeerConnection(pcConfig);
+      audioOut.srcObject = new MediaStream();
+
+      outputPc.ontrack = event => {
+        audioOut.srcObject.addTrack(event.track);
+        spkInd.classList.add('active');
+        audioOut.play().catch(() => {});
+      };
+
+      outputPc.onicecandidate = event => {
+        if (event.candidate) {
+          outputWs.send(JSON.stringify({ type: 'ice_candidate', data: event.candidate }));
+        }
+      };
+
+      outputPc.onconnectionstatechange = () => {
+        if (outputPc.connectionState === 'connected') {
+          checkBothConnected();
+        } else if (outputPc.connectionState === 'disconnected' || outputPc.connectionState === 'failed') {
+          setStatus('Output disconnected');
+          cleanup();
+        }
+      };
+
+      outputWs.onmessage = async event => {
+        const { type, data } = JSON.parse(event.data);
+        if (type === 'sdp_offer') {
+          await outputPc.setRemoteDescription(data);
+          const answer = await outputPc.createAnswer();
+          await outputPc.setLocalDescription(answer);
+          outputWs.send(JSON.stringify({ type: 'sdp_answer', data: answer }));
+        } else if (type === 'ice_candidate') {
+          await outputPc.addIceCandidate(data);
+        }
+      };
+    }
+
+    function checkBothConnected() {
+      if (inputPc?.connectionState === 'connected' &&
+          outputPc?.connectionState === 'connected') {
+        setStatus('Connected - speak into your microphone', 'connected');
+        startBtn.textContent = 'Stop';
+        startBtn.disabled = false;
+        startBtn.onclick = stop;
+      }
+    }
+
+    function stop() {
+      cleanup();
+      setStatus('Disconnected');
+      startBtn.textContent = 'Start';
+      startBtn.onclick = start;
+      startBtn.disabled = false;
+    }
+
+    function cleanup() {
+      localStream?.getTracks().forEach(t => t.stop());
+      inputPc?.close();
+      outputPc?.close();
+      inputWs?.close();
+      outputWs?.close();
+      textWs?.close();
+      micInd.classList.remove('active');
+      spkInd.classList.remove('active');
+      inputPc = outputPc = inputWs = outputWs = textWs = localStream = null;
+    }
+
+    startBtn.onclick = start;
+  </script>
+</body>
+</html>
