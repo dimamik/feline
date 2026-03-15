@@ -2,10 +2,11 @@ defmodule Feline.Transports.Boombox.AudioOutput do
   @moduledoc """
   Processor that sends TTS audio to a Boombox writer for WebRTC output.
 
-  Uses async message-based writing to avoid blocking the processor
-  GenServer on Boombox's demand-based back-pressure.
+  Uses async message-based writing via Boombox's :message endpoint
+  to avoid blocking the processor GenServer on demand-based back-pressure.
   """
   use Feline.Processor
+  require Logger
 
   alias Feline.Frames.{
     TTSAudioRawFrame,
@@ -20,7 +21,7 @@ defmodule Feline.Transports.Boombox.AudioOutput do
   def init(opts) do
     {:ok,
      %{
-       writer_pid: Keyword.fetch!(opts, :writer).server_reference,
+       writer_pid: Keyword.fetch!(opts, :writer_pid),
        sample_rate: Keyword.get(opts, :sample_rate, 24_000),
        speaking: false,
        pts: 0

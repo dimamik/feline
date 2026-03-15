@@ -5,14 +5,12 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
   Opens a local web server. Navigate to the URL in your browser,
   click Start, and speak into your microphone.
 
-  Requires Deepgram STT, OpenAI LLM, and ElevenLabs TTS.
+  Requires Deepgram STT, OpenAI LLM, and Deepgram TTS.
 
   ## Environment variables (or .env file)
 
       OPENAI_API_KEY=...
       DEEPGRAM_API_KEY=...
-      ELEVENLABS_API_KEY=...
-      ELEVENLABS_VOICE_ID=...
 
   ## Usage
 
@@ -26,7 +24,7 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
   alias Feline.Context
   alias Feline.Frames.{InputAudioRawFrame, LLMContextFrame}
   alias Feline.Processors.ContextAggregatorPair
-  alias Feline.Transports.Boombox.{Plug, AudioOutput, CaptionSender}
+  alias Feline.Transports.Boombox.{Plug, AudioOutput}
   alias Membrane.WebRTC.Signaling
 
   @sample_rate 16_000
@@ -46,8 +44,6 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
 
     openai_key = require_env!("OPENAI_API_KEY")
     deepgram_key = require_env!("DEEPGRAM_API_KEY")
-    elevenlabs_key = require_env!("ELEVENLABS_API_KEY")
-    voice_id = require_env!("ELEVENLABS_VOICE_ID")
 
     # Create signaling channels for WebRTC negotiation
     {:ok, input_sig_pid} = Signaling.start_link([])
@@ -56,17 +52,10 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
     {:ok, output_sig_pid} = Signaling.start_link([])
     output_signaling = Signaling.new(output_sig_pid)
 
-    # Agent to track the connected browser text WebSocket PID
-    {:ok, text_registry} = Agent.start_link(fn -> nil end)
-
     # Start HTTP server for HTML page + signaling WebSocket endpoints
     {:ok, _bandit} =
       Bandit.start_link(
-        plug:
-          {Plug,
-           input_signaling: input_signaling,
-           output_signaling: output_signaling,
-           text_registry: text_registry},
+        plug: {Plug, input_signaling: input_signaling, output_signaling: output_signaling},
         port: port,
         scheme: :http
       )
@@ -75,7 +64,7 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
     Mix.shell().info("Open http://localhost:#{port} in your browser and click Start.")
     Mix.shell().info("Waiting for browser to connect...\n")
 
-    # Start Boombox servers with message-based API to avoid the default 5s GenServer.call timeout.
+    # Start Boombox servers via the message API to avoid the default 5s GenServer.call timeout.
     # Boombox.run blocks until WebRTC negotiation completes (browser must connect first).
     # Both must run in parallel since each waits for its own WebRTC connection.
     reader_task = Task.async(fn -> start_boombox(:reader, input_signaling) end)
@@ -100,10 +89,8 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
         {Feline.Processors.AssistantContextAggregator, context_agent: pair.agent},
         {Feline.Processors.ConsoleLogger.BotOutput, []},
         {Feline.Processors.SentenceAggregator, []},
-        {CaptionSender, text_registry: text_registry},
-        {Feline.Services.ElevenLabs.StreamingTTS,
-         api_key: elevenlabs_key, voice_id: voice_id, sample_rate: 24_000},
-        {AudioOutput, writer: writer, sample_rate: 24_000}
+        {Feline.Services.Deepgram.StreamingTTS, api_key: deepgram_key, sample_rate: 24_000},
+        {AudioOutput, writer_pid: writer, sample_rate: 24_000}
       ])
 
     {:ok, task} = Pipeline.Task.start_link(pipeline)
@@ -116,27 +103,26 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
   end
 
   defp start_boombox(:reader, signaling) do
-    pid = start_boombox_server([
-      input: {:webrtc, signaling},
-      output:
-        {:reader,
-         audio: :binary,
-         video: false,
-         audio_format: :s16le,
-         audio_rate: @sample_rate,
-         audio_channels: 1}
-    ])
+    pid =
+      start_boombox_server(
+        input: {:webrtc, signaling},
+        output:
+          {:reader,
+           audio: :binary,
+           video: false,
+           audio_format: :s16le,
+           audio_rate: @sample_rate,
+           audio_channels: 1}
+      )
 
     %Boombox.Reader{server_reference: pid}
   end
 
   defp start_boombox(:writer, signaling) do
-    pid = start_boombox_server(:messages, [
-      input: {:writer, audio: :binary, video: false},
+    start_boombox_server(:messages,
+      input: {:message, audio: :binary, video: false},
       output: {:webrtc, signaling}
-    ])
-
-    %Boombox.Writer{server_reference: pid}
+    )
   end
 
   # Starts a Boombox.Server and sends {:run, opts} via the message API
@@ -225,12 +211,14 @@ defmodule Mix.Tasks.Feline.TalkWebrtc do
       |> File.read!()
       |> String.split("\n", trim: true)
       |> Enum.reject(&(String.starts_with?(&1, "#") or &1 == ""))
-      |> Enum.each(fn line ->
-        case String.split(line, "=", parts: 2) do
-          [key, value] -> System.put_env(String.trim(key), String.trim(value))
-          _ -> :ok
-        end
-      end)
+      |> Enum.each(&parse_env_line/1)
+    end
+  end
+
+  defp parse_env_line(line) do
+    case String.split(line, "=", parts: 2) do
+      [key, value] -> System.put_env(String.trim(key), String.trim(value))
+      _ -> :ok
     end
   end
 

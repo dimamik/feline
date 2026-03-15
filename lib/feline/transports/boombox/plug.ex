@@ -5,7 +5,7 @@ defmodule Feline.Transports.Boombox.Plug do
   """
   @behaviour Plug
 
-  alias Feline.Transports.Boombox.{SignalingHandler, TextHandler}
+  alias Feline.Transports.Boombox.SignalingHandler
 
   @impl Plug
   def init(opts), do: Map.new(opts)
@@ -33,14 +33,6 @@ defmodule Feline.Transports.Boombox.Plug do
           conn,
           SignalingHandler,
           %{signaling: opts.output_signaling},
-          []
-        )
-
-      "/ws/text" ->
-        WebSockAdapter.upgrade(
-          conn,
-          TextHandler,
-          %{registry: opts.text_registry},
           []
         )
 

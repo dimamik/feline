@@ -52,20 +52,6 @@
       vertical-align: middle;
     }
     .indicator.active { background: #4caf50; }
-    #captions {
-      margin-top: 2rem;
-      text-align: center;
-      font-size: 1.2rem;
-      line-height: 1.8;
-      color: #e0e0e0;
-      min-height: 3.5em;
-    }
-    #captions .line {
-      display: block;
-      opacity: 0.4;
-      transition: opacity 0.3s;
-    }
-    #captions .line.current { opacity: 1; }
   </style>
 </head>
 <body>
@@ -79,7 +65,6 @@
       &nbsp;&nbsp;
       <span class="indicator" id="spkIndicator"></span> Speaker
     </div>
-    <div id="captions"></div>
     <audio id="audioOut" autoplay></audio>
   </div>
 
@@ -90,11 +75,8 @@
     const micInd = document.getElementById('micIndicator');
     const spkInd = document.getElementById('spkIndicator');
     const audioOut = document.getElementById('audioOut');
-    const captionsEl = document.getElementById('captions');
 
-    let inputWs, outputWs, textWs, inputPc, outputPc, localStream;
-    let captionLines = [];
-    const MAX_CAPTION_LINES = 3;
+    let inputWs, outputWs, inputPc, outputPc, localStream;
 
     function setStatus(text, cls) {
       statusEl.textContent = text;
@@ -104,26 +86,6 @@
     function wsUrl(path) {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       return `${proto}//${location.host}${path}`;
-    }
-
-    function renderCaptions() {
-      const visible = captionLines.slice(-MAX_CAPTION_LINES);
-      const lastIdx = visible.length - 1;
-      captionsEl.innerHTML = visible.map((line, i) =>
-        `<span class="line${i === lastIdx ? ' current' : ''}">${line}</span>`
-      ).join('');
-    }
-
-    function setupTextWs() {
-      textWs = new WebSocket(wsUrl('/ws/text'));
-      textWs.onmessage = event => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'caption') {
-          captionLines.push(msg.text);
-          if (captionLines.length > MAX_CAPTION_LINES) captionLines.shift();
-          renderCaptions();
-        }
-      };
     }
 
     async function start() {
@@ -140,8 +102,6 @@
 
       micInd.classList.add('active');
       setStatus('Connecting...');
-
-      setupTextWs();
 
       inputWs = new WebSocket(wsUrl('/ws/input'));
       inputWs.onopen = () => setupInputPc();
@@ -250,10 +210,9 @@
       outputPc?.close();
       inputWs?.close();
       outputWs?.close();
-      textWs?.close();
       micInd.classList.remove('active');
       spkInd.classList.remove('active');
-      inputPc = outputPc = inputWs = outputWs = textWs = localStream = null;
+      inputPc = outputPc = inputWs = outputWs = localStream = null;
     }
 
     startBtn.onclick = start;

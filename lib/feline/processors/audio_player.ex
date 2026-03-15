@@ -31,11 +31,11 @@ defmodule Feline.Processors.AudioPlayer do
   @impl true
   def handle_frame(%TTSAudioRawFrame{audio: audio} = frame, :downstream, push_fn, state) do
     state =
-      unless state.speaking do
+      if state.speaking do
+        state
+      else
         push_fn.(%BotStartedSpeakingFrame{id: make_ref()}, :upstream)
         %{state | speaking: true}
-      else
-        state
       end
 
     new_buf = state.audio_buffer <> audio

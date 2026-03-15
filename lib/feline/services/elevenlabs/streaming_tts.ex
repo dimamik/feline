@@ -41,12 +41,10 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS do
   @impl Feline.Processor
   def handle_frame(%frame_mod{text: text}, :downstream, push_fn, state)
       when frame_mod in [TextFrame, LLMTextFrame] do
-    Logger.debug("[TTS] got #{frame_mod} text=#{inspect(String.slice(text, 0, 60))}")
     state = ensure_connected(state)
     state = %{state | text_buffer: state.text_buffer <> text}
 
     if sentence_end?(state.text_buffer) do
-      Logger.debug("[TTS] sending text=#{inspect(String.slice(state.text_buffer, 0, 80))}")
       send_text(state.text_buffer, state)
 
       unless state.speaking do
@@ -60,7 +58,6 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS do
   end
 
   def handle_frame(%LLMFullResponseEndFrame{} = frame, direction, push_fn, state) do
-    # Flush any remaining buffered text
     state =
       if state.text_buffer != "" do
         send_text(state.text_buffer, state)
@@ -74,7 +71,6 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS do
         state
       end
 
-    # Send EOS to trigger final audio generation; isFinal will emit TTSStoppedFrame
     flush_and_close(state)
     push_fn.(frame, direction)
     {:ok, state}
@@ -100,8 +96,6 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS do
 
   @impl Feline.Processor
   def handle_info({:tts_audio, audio}, push_fn, state) do
-    Logger.debug("[TTS] got audio chunk #{byte_size(audio)} bytes")
-
     push_fn.(
       %TTSAudioRawFrame{
         id: make_ref(),
@@ -115,8 +109,6 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS do
   end
 
   def handle_info(:tts_stream_end, push_fn, state) do
-    Logger.debug("[TTS] stream end, speaking=#{state.speaking}")
-
     if state.speaking do
       push_fn.(%TTSStoppedFrame{id: make_ref()}, :downstream)
     end
@@ -124,8 +116,12 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS do
     {:ok, %{state | speaking: false}}
   end
 
+  def handle_info({:tts_error, message}, _push_fn, state) do
+    raise "ElevenLabs TTS error: #{message}"
+    {:ok, state}
+  end
+
   def handle_info({:DOWN, _ref, :process, pid, _reason}, _push_fn, %{ws_pid: pid} = state) do
-    Logger.debug("[TTS] WS process DOWN")
     {:ok, %{state | ws_pid: nil}}
   end
 
@@ -150,13 +146,11 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS do
 
     case WsClient.start_link(url, state.api_key, self()) do
       {:ok, pid} ->
-        Logger.debug("[TTS] WS connected, pid=#{inspect(pid)}")
         Process.monitor(pid)
         %{state | ws_pid: pid}
 
       {:error, reason} ->
-        Logger.warning("[TTS] WS connect FAILED: #{inspect(reason)}")
-        %{state | ws_pid: nil}
+        raise "ElevenLabs TTS WebSocket connection failed: #{inspect(reason)}"
     end
   end
 
@@ -207,7 +201,6 @@ end
 defmodule Feline.Services.ElevenLabs.StreamingTTS.WsClient do
   @moduledoc false
   use WebSockex
-  require Logger
 
   def start_link(url, api_key, owner) do
     WebSockex.start_link(url, __MODULE__, %{owner: owner},
@@ -223,7 +216,6 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS.WsClient do
 
   @impl true
   def handle_info(:send_bos, state) do
-    Logger.debug("[WsClient] sending BOS")
     bos = Jason.encode!(%{text: " "})
     {:reply, {:text, bos}, state}
   end
@@ -238,16 +230,17 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS.WsClient do
       {:ok, %{"audio" => audio}} when is_binary(audio) and audio != "" ->
         case Base.decode64(audio) do
           {:ok, decoded} ->
-            Logger.debug("[WsClient] audio chunk #{byte_size(decoded)} bytes")
             send(state.owner, {:tts_audio, decoded})
 
           :error ->
-            Logger.warning("[WsClient] base64 decode error")
+            send(state.owner, {:tts_error, "base64 decode error"})
         end
 
       {:ok, %{"isFinal" => true}} ->
-        Logger.debug("[WsClient] isFinal received")
         send(state.owner, :tts_stream_end)
+
+      {:ok, %{"error" => error, "message" => message}} ->
+        send(state.owner, {:tts_error, "#{error}: #{message}"})
 
       _ ->
         :ok
@@ -259,6 +252,11 @@ defmodule Feline.Services.ElevenLabs.StreamingTTS.WsClient do
   def handle_frame(_frame, state), do: {:ok, state}
 
   @impl true
+  def handle_disconnect(%{reason: {:remote, _code, message}}, state) do
+    send(state.owner, {:tts_error, message})
+    {:ok, state}
+  end
+
   def handle_disconnect(_status, state) do
     {:ok, state}
   end
