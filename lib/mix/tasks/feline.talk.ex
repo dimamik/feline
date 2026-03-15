@@ -3,14 +3,12 @@ defmodule Mix.Tasks.Feline.Talk do
   Live voice agent — speak into your microphone and hear the agent respond.
 
   Requires ffmpeg and ffplay installed. Uses Deepgram STT, OpenAI LLM,
-  and ElevenLabs TTS.
+  and Deepgram TTS.
 
   ## Environment variables (or .env file)
 
       OPENAI_API_KEY=...
       DEEPGRAM_API_KEY=...
-      ELEVENLABS_API_KEY=...
-      ELEVENLABS_VOICE_ID=...
 
   ## Usage
 
@@ -39,8 +37,6 @@ defmodule Mix.Tasks.Feline.Talk do
 
     openai_key = require_env!("OPENAI_API_KEY")
     deepgram_key = require_env!("DEEPGRAM_API_KEY")
-    elevenlabs_key = require_env!("ELEVENLABS_API_KEY")
-    voice_id = require_env!("ELEVENLABS_VOICE_ID")
 
     context = Context.new([%{"role" => "system", "content" => system_prompt}])
     {:ok, pair} = ContextAggregatorPair.start(context)
@@ -55,8 +51,7 @@ defmodule Mix.Tasks.Feline.Talk do
         {Feline.Processors.AssistantContextAggregator, context_agent: pair.agent},
         {Feline.Processors.ConsoleLogger.BotOutput, []},
         {Feline.Processors.SentenceAggregator, []},
-        {Feline.Services.ElevenLabs.StreamingTTS,
-         api_key: elevenlabs_key, voice_id: voice_id, sample_rate: 24_000},
+        {Feline.Services.Deepgram.StreamingTTS, api_key: deepgram_key, sample_rate: 24_000},
         {Feline.Processors.AudioPlayer, sample_rate: 24_000}
       ])
 
@@ -188,12 +183,14 @@ defmodule Mix.Tasks.Feline.Talk do
       |> File.read!()
       |> String.split("\n", trim: true)
       |> Enum.reject(&(String.starts_with?(&1, "#") or &1 == ""))
-      |> Enum.each(fn line ->
-        case String.split(line, "=", parts: 2) do
-          [key, value] -> System.put_env(String.trim(key), String.trim(value))
-          _ -> :ok
-        end
-      end)
+      |> Enum.each(&parse_env_line/1)
+    end
+  end
+
+  defp parse_env_line(line) do
+    case String.split(line, "=", parts: 2) do
+      [key, value] -> System.put_env(String.trim(key), String.trim(value))
+      _ -> :ok
     end
   end
 

@@ -16,18 +16,21 @@ defmodule Feline.Transports.WebSocket.Output do
     EndFrame
   }
 
+  alias Feline.RTVI.Messages
   alias Feline.TransportParams
 
   @impl true
   def init(opts) do
     params = Keyword.get(opts, :params, %TransportParams{})
     ws_pid = Keyword.get(opts, :ws_pid)
+    rtvi_enabled = Keyword.get(opts, :rtvi_enabled, false)
     chunk_bytes = compute_chunk_bytes(params)
 
     {:ok,
      %{
        params: params,
        ws_pid: ws_pid,
+       rtvi_enabled: rtvi_enabled,
        audio_buffer: <<>>,
        chunk_bytes: chunk_bytes,
        speaking: false,
@@ -40,14 +43,15 @@ defmodule Feline.Transports.WebSocket.Output do
       when frame_mod in [OutputAudioRawFrame, TTSAudioRawFrame] do
     if state.params.audio_out_enabled do
       state =
-        unless state.speaking do
+        if state.speaking do
+          state
+        else
           push_fn.(%BotStartedSpeakingFrame{id: make_ref()}, :downstream)
+          maybe_send_rtvi(state, Messages.bot_started_speaking())
 
           state
           |> schedule_send()
           |> Map.put(:speaking, true)
-        else
-          state
         end
 
       {:ok, %{state | audio_buffer: state.audio_buffer <> audio}}
@@ -99,7 +103,7 @@ defmodule Feline.Transports.WebSocket.Output do
 
   # 10ms of 16-bit PCM mono audio * chunks_per_send
   defp compute_chunk_bytes(params) do
-    div(params.audio_out_sample_rate, 100) * 1 * 2 * params.audio_out_10ms_chunks
+    div(params.audio_out_sample_rate, 100) * 2 * params.audio_out_10ms_chunks
   end
 
   defp schedule_send(state) do
@@ -135,8 +139,15 @@ defmodule Feline.Transports.WebSocket.Output do
   defp stop_speaking(state, push_fn) do
     if state.speaking do
       push_fn.(%BotStoppedSpeakingFrame{id: make_ref()}, :downstream)
+      maybe_send_rtvi(state, Messages.bot_stopped_speaking())
     end
 
     %{state | speaking: false}
   end
+
+  defp maybe_send_rtvi(%{rtvi_enabled: true} = state, payload) do
+    send_message(payload, state)
+  end
+
+  defp maybe_send_rtvi(_state, _payload), do: :ok
 end

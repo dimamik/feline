@@ -131,7 +131,11 @@ defmodule Feline.Services.OpenAI.StreamingLLM do
         tool_calls_acc
     after
       30_000 ->
-        push_fn.(%ErrorFrame{id: make_ref(), message: "SSE stream timed out after 30s"}, :upstream)
+        push_fn.(
+          %ErrorFrame{id: make_ref(), message: "SSE stream timed out after 30s"},
+          :upstream
+        )
+
         tool_calls_acc
     end
   end
@@ -140,24 +144,23 @@ defmodule Feline.Services.OpenAI.StreamingLLM do
     data
     |> String.split("\n")
     |> Enum.reduce(acc, fn line, acc ->
-      case String.trim(line) do
-        "data: [DONE]" ->
-          acc
-
-        "data: " <> json_str ->
-          case Jason.decode(json_str) do
-            {:ok, %{"choices" => [%{"delta" => delta} | _]}} ->
-              process_delta(delta, push_fn, acc)
-
-            _ ->
-              acc
-          end
-
-        _ ->
-          acc
-      end
+      line |> String.trim() |> process_sse_line(push_fn, acc)
     end)
   end
+
+  defp process_sse_line("data: [DONE]", _push_fn, acc), do: acc
+
+  defp process_sse_line("data: " <> json_str, push_fn, acc) do
+    case Jason.decode(json_str) do
+      {:ok, %{"choices" => [%{"delta" => delta} | _]}} ->
+        process_delta(delta, push_fn, acc)
+
+      _ ->
+        acc
+    end
+  end
+
+  defp process_sse_line(_line, _push_fn, acc), do: acc
 
   defp process_delta(%{"content" => content}, push_fn, acc)
        when is_binary(content) and content != "" do

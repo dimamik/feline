@@ -1,13 +1,13 @@
 defmodule Feline.MixProject do
   use Mix.Project
 
-  @version "0.1.0-rc.1"
+  @version "0.1.0-rc.2"
 
   def project do
     [
       app: :feline,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: ">= 1.18.0",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -18,7 +18,12 @@ defmodule Feline.MixProject do
       aliases: aliases(),
       docs: [
         main: "readme",
-        extras: ["README.md", "CHANGELOG.md", "guides/live-voice-demo.md"],
+        extras: [
+          "README.md",
+          "CHANGELOG.md",
+          "guides/live-voice-demo.md",
+          "guides/phoenix-voice-bot.md"
+        ],
         groups_for_extras: [Guides: ~r/guides\/.*/],
         assets: %{"assets" => "assets"}
       ]
@@ -45,7 +50,8 @@ defmodule Feline.MixProject do
         "pipecat" => "https://github.com/pipecat-ai/pipecat"
       },
       maintainers: ["Dima Mikielewicz"],
-      files: ~w(lib assets .formatter.exs mix.exs README.md LICENSE CHANGELOG.md)
+      files:
+        ~w(lib priv/static assets guides .formatter.exs mix.exs README.md LICENSE CHANGELOG.md)
     ]
   end
 
@@ -68,6 +74,10 @@ defmodule Feline.MixProject do
       {:websockex, "~> 0.4"},
       {:bandit, "~> 1.6"},
       {:websock_adapter, "~> 0.5"},
+      {:boombox, "~> 0.2", optional: true},
+      {:phoenix, "~> 1.7", optional: true},
+      {:phoenix_live_view, "~> 1.0", optional: true},
+      {:phoenix_html, "~> 4.0", optional: true},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, ">= 0.0.0", only: [:dev, :test], runtime: false}
     ]
