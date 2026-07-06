@@ -1,163 +1,168 @@
 defmodule Feline.PipelineTest do
   use ExUnit.Case, async: true
 
-  alias Feline.Pipeline
-  alias Feline.Frames.{TextFrame, LLMTextFrame}
+  alias Feline.Pipeline.Task, as: PipelineTask
+  alias Feline.TestProcessors.{CleanupReporter, Crasher, Recorder, SlowWorker}
 
-  defmodule Passthrough do
-    use Feline.Processor
+  alias Feline.Frames.All.{
+    CancelFrame,
+    EndFrame,
+    FunctionCallResultFrame,
+    InterruptionFrame,
+    StartFrame,
+    TextFrame
+  }
 
-    @impl true
-    def init(_opts), do: {:ok, %{}}
+  defp start_pipeline(processors, opts \\ []) do
+    {:ok, task} =
+      PipelineTask.start_link(
+        [processors: processors, subscriber: self()] ++ opts
+      )
 
-    @impl true
-    def handle_frame(frame, direction, _push_fn, state) do
-      {:push, frame, direction, state}
-    end
+    task
   end
 
-  defmodule Uppercaser do
-    use Feline.Processor
+  test "frames flow downstream in order and reach the sink" do
+    task = start_pipeline([{Recorder, listener: self()}])
 
-    @impl true
-    def init(_opts), do: {:ok, %{}}
+    PipelineTask.queue_frame(task, %TextFrame{text: "one"})
+    PipelineTask.queue_frame(task, %TextFrame{text: "two"})
 
-    @impl true
-    def handle_frame(%TextFrame{text: text} = frame, :downstream, _push_fn, state) do
-      {:push, %{frame | text: String.upcase(text)}, :downstream, state}
-    end
-
-    def handle_frame(frame, direction, _push_fn, state) do
-      {:push, frame, direction, state}
-    end
+    assert_receive {:recorded, :recorder, %TextFrame{text: "one"}, :downstream}
+    assert_receive {:recorded, :recorder, %TextFrame{text: "two"}, :downstream}
+    assert_receive {:feline_pipeline, :downstream, %TextFrame{text: "one"}}
+    assert_receive {:feline_pipeline, :downstream, %TextFrame{text: "two"}}
   end
 
-  defmodule FrameMultiplier do
-    use Feline.Processor
-
-    @impl true
-    def init(_opts), do: {:ok, %{}}
-
-    @impl true
-    def handle_frame(%TextFrame{text: text} = _frame, :downstream, _push_fn, state) do
-      frames = [
-        {%LLMTextFrame{id: make_ref(), text: "LLM: #{text}"}, :downstream},
-        {%TextFrame{id: make_ref(), text: "Echo: #{text}"}, :downstream}
-      ]
-
-      {:push_many, frames, state}
-    end
-
-    def handle_frame(frame, direction, _push_fn, state) do
-      {:push, frame, direction, state}
-    end
-  end
-
-  test "simple pipeline: frame flows through passthrough to sink" do
-    pipeline = Pipeline.new([{Passthrough, []}])
-    {:ok, task} = Pipeline.Task.start_link(pipeline)
-
-    # Run in a separate process so we can interact
-    spawn(fn -> Pipeline.Task.run(task) end)
-    Process.sleep(50)
-
-    Pipeline.Task.queue_frame(task, %TextFrame{id: make_ref(), text: "hello"})
-    Process.sleep(50)
-    Pipeline.Task.stop_when_done(task)
-    Process.sleep(100)
-  end
-
-  test "pipeline with transformation" do
-    # We need a way to observe output. Let's use a processor that reports to test.
-    test_pid = self()
-
-    defmodule Reporter do
+  test "StartFrame runs handle_setup before any other frame and carries params" do
+    defmodule SetupRecorder do
       use Feline.Processor
 
       @impl true
-      def init(opts), do: {:ok, %{test_pid: Keyword.fetch!(opts, :test_pid)}}
-
-      @impl true
-      def handle_frame(%TextFrame{} = frame, :downstream, _push_fn, state) do
-        send(state.test_pid, {:output, frame})
-        {:push, frame, :downstream, state}
-      end
-
-      def handle_frame(frame, direction, _push_fn, state) do
-        {:push, frame, direction, state}
+      def handle_setup(start_frame, _ctx, %{listener: listener} = state) do
+        send(listener, {:setup, start_frame})
+        {:ok, state}
       end
     end
 
-    pipeline =
-      Pipeline.new([
-        {Uppercaser, []},
-        {Reporter, [test_pid: test_pid]}
-      ])
+    task =
+      start_pipeline([{SetupRecorder, listener: self()}], params: [audio_out_sample_rate: 8_000])
 
-    {:ok, task} = Pipeline.Task.start_link(pipeline)
-    spawn(fn -> Pipeline.Task.run(task) end)
-    Process.sleep(50)
+    PipelineTask.queue_frame(task, %TextFrame{text: "after start"})
 
-    Pipeline.Task.queue_frame(task, %TextFrame{id: make_ref(), text: "hello"})
-
-    assert_receive {:output, %TextFrame{text: "HELLO"}}, 500
-
-    Pipeline.Task.stop_when_done(task)
-    Process.sleep(100)
+    assert_receive {:setup, %StartFrame{audio_out_sample_rate: 8_000}}
+    assert_receive {:feline_pipeline, :downstream, %TextFrame{text: "after start"}}
   end
 
-  test "pipeline with push_many" do
-    test_pid = self()
+  test "EndFrame drains the pipeline then stops the task normally" do
+    task = start_pipeline([{CleanupReporter, listener: self()}])
 
-    defmodule MultiReporter do
+    PipelineTask.queue_frame(task, %TextFrame{text: "last words"})
+    PipelineTask.stop_when_done(task)
+
+    assert PipelineTask.await(task, 2_000) == :ok
+    assert_receive :cleaned_up
+    assert_receive {:feline_pipeline, :downstream, %TextFrame{text: "last words"}}
+  end
+
+  test "CancelFrame stops the pipeline immediately" do
+    task = start_pipeline([])
+    PipelineTask.cancel(task)
+    assert PipelineTask.await(task, 2_000) == :ok
+  end
+
+  test "a processor crash takes the pipeline down" do
+    task = start_pipeline([Crasher])
+    Process.flag(:trap_exit, true)
+
+    PipelineTask.queue_frame(task, %TextFrame{text: "boom"})
+
+    assert {:error, {%RuntimeError{message: "boom"}, _stacktrace}} =
+             PipelineTask.await(task, 2_000)
+  end
+
+  test "data frames queue behind an async task and flow in order after it finishes" do
+    task = start_pipeline([{SlowWorker, listener: self()}])
+
+    PipelineTask.queue_frame(task, %TextFrame{text: "a"})
+    PipelineTask.queue_frame(task, %TextFrame{text: "b"})
+
+    assert_receive {:working_on, "a", worker_pid}
+    refute_receive {:feline_pipeline, :downstream, %TextFrame{}}, 50
+
+    send(worker_pid, :finish)
+    assert_receive {:feline_pipeline, :downstream, %TextFrame{text: "a!done"}}
+
+    assert_receive {:working_on, "b", second_worker}
+    send(second_worker, :finish)
+    assert_receive {:feline_pipeline, :downstream, %TextFrame{text: "b!done"}}
+  end
+
+  test "interruption kills the in-flight task and flushes queued data frames" do
+    task = start_pipeline([{SlowWorker, listener: self()}, {Recorder, listener: self()}])
+
+    PipelineTask.queue_frame(task, %TextFrame{text: "a"})
+    PipelineTask.queue_frame(task, %TextFrame{text: "b"})
+    assert_receive {:working_on, "a", _worker_pid}
+
+    PipelineTask.queue_frame(task, %InterruptionFrame{})
+
+    # The interruption itself propagates; the interrupted/flushed text never does.
+    assert_receive {:recorded, :recorder, %InterruptionFrame{}, :downstream}
+    refute_receive {:working_on, "b", _}, 100
+    refute_receive {:feline_pipeline, :downstream, %TextFrame{}}, 50
+
+    # Pipeline still alive and processing new frames.
+    PipelineTask.queue_frame(task, %TextFrame{text: "c"})
+    assert_receive {:working_on, "c", worker_pid}
+    send(worker_pid, :finish)
+    assert_receive {:feline_pipeline, :downstream, %TextFrame{text: "c!done"}}
+  end
+
+  test "interruption preserves uninterruptible frames in the pending queue" do
+    task = start_pipeline([{SlowWorker, listener: self()}])
+
+    PipelineTask.queue_frame(task, %TextFrame{text: "a"})
+    assert_receive {:working_on, "a", _worker_pid}
+
+    result = %FunctionCallResultFrame{function_name: "f", tool_call_id: "1", result: "42"}
+    PipelineTask.queue_frame(task, result)
+    PipelineTask.queue_frame(task, %TextFrame{text: "flushed"})
+    PipelineTask.queue_frame(task, %InterruptionFrame{})
+
+    assert_receive {:feline_pipeline, :downstream, %FunctionCallResultFrame{result: "42"}}
+    refute_receive {:feline_pipeline, :downstream, %TextFrame{}}, 50
+  end
+
+  test "EndFrame survives interruption (uninterruptible)" do
+    task = start_pipeline([{SlowWorker, listener: self()}])
+
+    PipelineTask.queue_frame(task, %TextFrame{text: "a"})
+    assert_receive {:working_on, "a", _worker_pid}
+
+    PipelineTask.queue_frame(task, %EndFrame{})
+    PipelineTask.queue_frame(task, %InterruptionFrame{})
+
+    assert PipelineTask.await(task, 2_000) == :ok
+  end
+
+  test "upstream frames reach the source and the subscriber" do
+    defmodule UpstreamPusher do
       use Feline.Processor
 
-      @impl true
-      def init(opts), do: {:ok, %{test_pid: Keyword.fetch!(opts, :test_pid)}}
+      alias Feline.Frames.All.TextFrame
 
       @impl true
-      def handle_frame(frame, :downstream, _push_fn, state) do
-        send(state.test_pid, {:output, frame})
-        {:push, frame, :downstream, state}
+      def handle_frame(%TextFrame{text: "ping"}, :downstream, _ctx, state) do
+        {:push, %TextFrame{text: "pong"}, :upstream, state}
       end
 
-      def handle_frame(frame, direction, _push_fn, state) do
-        {:push, frame, direction, state}
-      end
+      def handle_frame(frame, direction, _ctx, state), do: {:push, frame, direction, state}
     end
 
-    pipeline =
-      Pipeline.new([
-        {FrameMultiplier, []},
-        {MultiReporter, [test_pid: test_pid]}
-      ])
+    task = start_pipeline([UpstreamPusher])
+    PipelineTask.queue_frame(task, %TextFrame{text: "ping"})
 
-    {:ok, task} = Pipeline.Task.start_link(pipeline)
-    spawn(fn -> Pipeline.Task.run(task) end)
-    Process.sleep(50)
-
-    Pipeline.Task.queue_frame(task, %TextFrame{id: make_ref(), text: "hi"})
-
-    assert_receive {:output, %LLMTextFrame{text: "LLM: hi"}}, 500
-    assert_receive {:output, %TextFrame{text: "Echo: hi"}}, 500
-
-    Pipeline.Task.stop_when_done(task)
-    Process.sleep(100)
-  end
-
-  test "pipeline runner runs and completes" do
-    pipeline = Pipeline.new([{Passthrough, []}])
-
-    # Run in a task so we can stop it
-    test_task =
-      Task.async(fn ->
-        Pipeline.Runner.run(pipeline)
-      end)
-
-    # Give it time to start, then we need to stop it
-    # The runner blocks on Pipeline.Task.run which blocks until EndFrame
-    # We can't easily signal it, so just verify it starts
-    Process.sleep(100)
-    Task.shutdown(test_task, :brutal_kill)
+    assert_receive {:feline_pipeline, :upstream, %TextFrame{text: "pong"}}
   end
 end

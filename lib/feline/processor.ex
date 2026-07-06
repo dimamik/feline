@@ -1,67 +1,59 @@
 defmodule Feline.Processor do
   @moduledoc """
-  Behaviour for pipeline processors.
+  Behaviour for pipeline processors. Each processor is hosted by a
+  `Feline.Processor.Server` GenServer.
 
-  Each processor implements callbacks to receive frames, transform them,
-  and push results downstream or upstream. Use `use Feline.Processor` to
-  adopt the behaviour and generate a `child_spec/1` that wraps the module
-  in a `Feline.Processor.Server` GenServer.
+  Callbacks must return quickly - slow work (HTTP calls, streaming) belongs in
+  `{:async, fun, state}`, which runs `fun.(ctx)` in a monitored task. While a
+  task runs, incoming data/control frames queue in order; system frames are
+  handled immediately. An interruption kills the task and flushes the queue
+  (keeping uninterruptible frames).
 
-  ## Callbacks
+  `ctx` is a map with:
 
-    * `init/1` — initialize processor state from keyword options
-    * `handle_frame/4` — process a frame, return `{:ok, state}`,
-      `{:push, frame, direction, state}`, or `{:push_many, frames, state}`
-    * `handle_info/3` — handle non-frame messages (optional)
-    * `handle_setup/2` — called once after pipeline linking (optional)
-    * `handle_cleanup/1` — called on processor shutdown (optional)
+    * `:push` - `push.(frame, :downstream | :upstream)`, safe to call from tasks
+    * `:self` - the hosting server pid (send it messages for `handle_info/3`)
+    * `:name` - the processor name
   """
+
   @type direction :: :downstream | :upstream
-  @type state :: term()
+  @type ctx :: %{push: (struct(), direction -> :ok), self: pid(), name: term()}
+  @type result ::
+          {:ok, state :: term()}
+          | {:push, struct(), direction, state :: term()}
+          | {:push_many, [{struct(), direction}], state :: term()}
+          | {:async, (ctx -> term()), state :: term()}
 
-  @type push_fn :: (struct(), direction() -> :ok)
-
-  @callback init(opts :: keyword()) :: {:ok, state}
-
-  @callback handle_frame(frame :: struct(), direction, push_fn, state) ::
-              {:ok, state}
-              | {:push, struct(), direction, state}
-              | {:push_many, [{struct(), direction}], state}
-
-  @callback handle_info(msg :: term(), push_fn, state) :: {:ok, state}
-
-  @callback handle_setup(setup :: map(), state) :: {:ok, state}
-  @callback handle_cleanup(state) :: :ok
-
-  @optional_callbacks handle_info: 3, handle_setup: 2, handle_cleanup: 1
+  @callback init(keyword()) :: {:ok, term()}
+  @callback handle_setup(start_frame :: struct(), ctx, state :: term()) :: {:ok, term()}
+  @callback handle_frame(frame :: struct(), direction, ctx, state :: term()) :: result
+  @callback handle_info(message :: term(), ctx, state :: term()) :: result
+  @callback handle_cleanup(state :: term()) :: term()
 
   defmacro __using__(_opts) do
     quote do
       @behaviour Feline.Processor
 
-      def child_spec(opts) do
-        %{
-          id: {__MODULE__, make_ref()},
-          start: {Feline.Processor.Server, :start_link, [{__MODULE__, opts}]},
-          restart: :temporary
-        }
-      end
+      @impl true
+      def init(opts), do: {:ok, Map.new(opts)}
+
+      @impl true
+      def handle_setup(_start_frame, _ctx, state), do: {:ok, state}
+
+      @impl true
+      def handle_frame(frame, direction, _ctx, state), do: {:push, frame, direction, state}
+
+      @impl true
+      def handle_info(_message, _ctx, state), do: {:ok, state}
+
+      @impl true
+      def handle_cleanup(_state), do: :ok
+
+      defoverridable init: 1,
+                     handle_setup: 3,
+                     handle_frame: 4,
+                     handle_info: 3,
+                     handle_cleanup: 1
     end
-  end
-
-  def queue_frame(pid, frame, direction \\ :downstream) do
-    tag = if Feline.Frame.system?(frame), do: :system_frame, else: :frame
-    send(pid, {tag, frame, direction})
-    :ok
-  end
-
-  def link(processor, next_processor) do
-    GenServer.call(processor, {:link_next, next_processor})
-    GenServer.call(next_processor, {:link_prev, processor})
-    :ok
-  end
-
-  def setup(pid, setup) do
-    GenServer.call(pid, {:setup, setup})
   end
 end

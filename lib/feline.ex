@@ -1,25 +1,10 @@
 defmodule Feline do
   @moduledoc """
-  Feline — Real-time voice AI pipelines for Elixir.
+  A port of pipecat (real-time voice AI pipelines) to Elixir/OTP.
 
-  An Elixir reimplementation of Python's pipecat framework, leveraging
-  BEAM/OTP for true concurrent frame processing.
-
-  ## Core Concepts
-
-  - **Frames** — Data units flowing through the pipeline (audio, text, control signals)
-  - **Processors** — GenServer processes that transform frames
-  - **Pipeline** — A chain of processors linked together
-  - **Services** — AI integrations (LLM, STT, TTS) implemented as processors
-
-  ## Quick Start
-
-      pipeline = Feline.Pipeline.new([
-        {Feline.Services.Deepgram.STT, api_key: "...", sample_rate: 16_000},
-        {Feline.Services.OpenAI.LLM, api_key: "...", model: "gpt-4.1-mini"},
-        {Feline.Services.ElevenLabs.TTS, api_key: "...", voice_id: "..."}
-      ])
-
-      Feline.Pipeline.Runner.run(pipeline)
+  Build a list of `Feline.Processor` modules and run it with
+  `Feline.Pipeline.Task`; serve it to pipecat web clients with
+  `Feline.Transports.WebSocket`. See `examples/voice_bot.exs` for the
+  complete picture.
   """
 end

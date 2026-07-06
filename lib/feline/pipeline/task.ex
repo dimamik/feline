@@ -1,197 +1,152 @@
 defmodule Feline.Pipeline.Task do
   @moduledoc """
-  Orchestrates pipeline execution. Starts processors under a DynamicSupervisor,
-  links them in order, sends StartFrame, and manages the lifecycle.
+  Instantiates and runs a pipeline: starts one `Feline.Processor.Server` per
+  processor (plus Source/Sink bookends), links them, injects `StartFrame`,
+  and shuts everything down when `EndFrame`/`CancelFrame` reaches the sink.
+
+  All processor servers are linked to this GenServer: if any processor
+  crashes, the whole pipeline goes down with it.
+
+  Options:
+
+    * `:processors` (required) - list of `module` or `{module, opts}`
+    * `:params` - `StartFrame` overrides, e.g. `audio_out_sample_rate: 24_000`
+    * `:subscriber` - pid receiving `{:feline_pipeline, direction, frame}`
+      for frames that exit the pipeline at either end (used by transports-less
+      pipelines and tests)
   """
+
   use GenServer
 
-  alias Feline.Frames.{StartFrame, EndFrame, CancelFrame}
-  alias Feline.Processor
+  alias Feline.Pipeline
+  alias Feline.Processor.Server
 
-  defstruct [
-    :pipeline,
-    :opts,
-    :supervisor,
-    :source,
-    :sink,
-    :caller,
-    all_pids: [],
-    running: false
-  ]
+  alias Feline.Frames.All.{
+    CancelFrame,
+    EndFrame,
+    ErrorFrame,
+    StartFrame
+  }
 
-  def start_link(pipeline, opts \\ []) do
-    GenServer.start_link(__MODULE__, {pipeline, opts})
+  require Logger
+
+  # -- API --
+
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+
+  def queue_frame(task, frame, direction \\ :downstream),
+    do: GenServer.cast(task, {:queue_frame, frame, direction})
+
+  def stop_when_done(task), do: queue_frame(task, %EndFrame{})
+  def cancel(task), do: queue_frame(task, %CancelFrame{})
+
+  @doc "Blocks until the pipeline finishes. Returns `:ok` or `{:error, reason}`."
+  def await(task, timeout \\ :infinity) do
+    ref = Process.monitor(task)
+
+    receive do
+      {:DOWN, ^ref, :process, _pid, :normal} -> :ok
+      {:DOWN, ^ref, :process, _pid, reason} -> {:error, reason}
+    after
+      timeout ->
+        Process.demonitor(ref, [:flush])
+        {:error, :timeout}
+    end
   end
 
-  def run(task) do
-    GenServer.call(task, :run, :infinity)
+  @doc "Convenience: start, run to completion, return `await/1` result."
+  def run(opts) do
+    {:ok, task} = start_link(opts)
+    await(task)
   end
 
-  def queue_frame(task, frame, direction \\ :downstream) do
-    GenServer.cast(task, {:queue_frame, frame, direction})
-  end
-
-  def queue_frames(task, frames) do
-    for frame <- frames, do: queue_frame(task, frame)
-    :ok
-  end
-
-  def stop_when_done(task) do
-    queue_frame(task, %EndFrame{id: Feline.Frame.new_id()})
-  end
-
-  def cancel(task) do
-    queue_frame(task, %CancelFrame{id: Feline.Frame.new_id()})
-  end
+  # -- GenServer --
 
   @impl true
-  def init({pipeline, opts}) do
-    {:ok, %__MODULE__{pipeline: pipeline, opts: opts}}
-  end
+  def init(opts) do
+    Process.flag(:trap_exit, true)
 
-  @impl true
-  def handle_call(:run, from, state) do
-    {:ok, sup} = DynamicSupervisor.start_link(strategy: :one_for_one)
+    specs =
+      [{Pipeline.Source, []}] ++
+        Pipeline.normalize(Keyword.fetch!(opts, :processors)) ++ [{Pipeline.Sink, []}]
 
-    # Start source and sink
-    {:ok, source} =
-      DynamicSupervisor.start_child(
-        sup,
-        {Feline.Processor.Server, {Feline.Pipeline.Source, [task_pid: self()]}}
-      )
-
-    {:ok, sink} =
-      DynamicSupervisor.start_child(
-        sup,
-        {Feline.Processor.Server, {Feline.Pipeline.Sink, [task_pid: self()]}}
-      )
-
-    # Start user processors
-    user_pids =
-      Enum.map(state.pipeline.processor_specs, fn {mod, opts} ->
-        {:ok, pid} =
-          DynamicSupervisor.start_child(
-            sup,
-            {Feline.Processor.Server, {mod, opts}}
-          )
-
+    pids =
+      for {module, processor_opts} <- specs do
+        bookend_opts = if module in [Pipeline.Source, Pipeline.Sink], do: [task: self()], else: []
+        {:ok, pid} = Server.start_link(module, processor_opts ++ bookend_opts)
         pid
-      end)
+      end
 
-    all_pids = [source | user_pids] ++ [sink]
-
-    # Link processors in order
-    all_pids
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.each(fn [a, b] -> Processor.link(a, b) end)
-
-    # Setup all processors
-    setup = %{observer: state.opts[:observer]}
-    for pid <- all_pids, do: Processor.setup(pid, setup)
-
-    # Send StartFrame
-    start_frame = %StartFrame{
-      id: Feline.Frame.new_id(),
-      audio_in_sample_rate: state.opts[:audio_in_sample_rate] || 16_000,
-      audio_out_sample_rate: state.opts[:audio_out_sample_rate] || 24_000,
-      enable_metrics: state.opts[:enable_metrics] || false,
-      enable_usage_metrics: state.opts[:enable_usage_metrics] || false
-    }
-
-    Processor.queue_frame(source, start_frame, :downstream)
-
-    # Monitor all processors
-    for pid <- all_pids, do: Process.monitor(pid)
-
-    # Start heartbeat if configured
-    if heartbeat_ms = heartbeat_interval(state.opts) do
-      Process.send_after(self(), :heartbeat, heartbeat_ms)
+    for {pid, index} <- Enum.with_index(pids) do
+      Server.link(pid, next: Enum.at(pids, index + 1), prev: if(index > 0, do: Enum.at(pids, index - 1)))
     end
 
-    {:noreply,
+    [source | _rest] = pids
+    start_frame = struct!(StartFrame, Keyword.get(opts, :params, []))
+    Server.push(source, start_frame, :downstream)
+
+    {:ok,
      %{
-       state
-       | supervisor: sup,
-         source: source,
-         sink: sink,
-         all_pids: all_pids,
-         running: true,
-         caller: from
+       pids: pids,
+       source: source,
+       subscriber: Keyword.get(opts, :subscriber),
+       stopping?: false
      }}
   end
 
   @impl true
-  def handle_cast({:queue_frame, frame, direction}, state) do
-    if state.running do
-      target = if direction == :downstream, do: state.source, else: state.sink
-      Processor.queue_frame(target, frame, direction)
-    end
-
+  def handle_cast({:queue_frame, frame, :downstream}, state) do
+    Server.push(state.source, frame, :downstream)
     {:noreply, state}
   end
 
   @impl true
-  def handle_info({:downstream_frame, %EndFrame{}}, state) do
-    finish(state, :ok)
-  end
+  def handle_info({:feline_pipeline, :downstream, %EndFrame{}}, state), do: shutdown(state)
+  def handle_info({:feline_pipeline, :downstream, %CancelFrame{}}, state), do: shutdown(state)
 
-  def handle_info({:downstream_frame, %CancelFrame{}}, state) do
-    finish(state, :cancelled)
-  end
+  def handle_info({:feline_pipeline, direction, frame}, state) do
+    case frame do
+      %ErrorFrame{fatal: true} = frame ->
+        Logger.error("#{inspect(__MODULE__)}: fatal error, cancelling pipeline: #{frame.error}")
+        cancel(self())
 
-  def handle_info({:downstream_frame, _frame}, state) do
-    {:noreply, state}
-  end
+      %ErrorFrame{} = frame ->
+        Logger.warning("#{inspect(__MODULE__)}: pipeline error: #{frame.error}")
 
-  def handle_info({:upstream_frame, _frame}, state) do
-    {:noreply, state}
-  end
-
-  def handle_info(:heartbeat, state) do
-    if state.running do
-      frame = %Feline.Frames.HeartbeatFrame{id: Feline.Frame.new_id()}
-      Processor.queue_frame(state.source, frame, :downstream)
-
-      if heartbeat_ms = heartbeat_interval(state.opts) do
-        Process.send_after(self(), :heartbeat, heartbeat_ms)
-      end
+      _other ->
+        :ok
     end
 
+    if state.subscriber, do: send(state.subscriber, {:feline_pipeline, direction, frame})
     {:noreply, state}
   end
 
-  def handle_info({:DOWN, _ref, :process, _pid, :normal}, state) do
-    {:noreply, state}
-  end
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
 
-  def handle_info({:DOWN, _ref, :process, _pid, :shutdown}, state) do
-    {:noreply, state}
-  end
-
-  def handle_info({:DOWN, _ref, :process, _pid, {:shutdown, _}}, state) do
-    {:noreply, state}
-  end
-
-  def handle_info({:DOWN, _ref, :process, pid, reason}, state) do
-    if state.running do
-      finish(state, {:error, {:processor_crashed, pid, reason}})
+  def handle_info({:EXIT, pid, reason}, state) do
+    if pid in state.pids and not state.stopping? do
+      Logger.error("#{inspect(__MODULE__)}: processor #{inspect(pid)} crashed: #{inspect(reason)}")
+      {:stop, reason, stop_processors(state)}
     else
       {:noreply, state}
     end
   end
 
-  defp finish(state, result) do
-    if state.caller, do: GenServer.reply(state.caller, result)
-
-    DynamicSupervisor.stop(state.supervisor, :normal)
-
-    {:stop, :normal, %{state | running: false, caller: nil}}
+  defp shutdown(state) do
+    {:stop, :normal, stop_processors(state)}
   end
 
-  defp heartbeat_interval(opts) do
-    case opts[:heartbeat_secs] do
-      nil -> nil
-      secs -> trunc(secs * 1_000)
+  defp stop_processors(state) do
+    state = %{state | stopping?: true}
+
+    for pid <- state.pids, Process.alive?(pid) do
+      try do
+        GenServer.stop(pid, :normal, 5_000)
+      catch
+        :exit, _reason -> :ok
+      end
     end
+
+    state
   end
 end

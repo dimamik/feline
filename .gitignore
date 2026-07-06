@@ -22,6 +22,8 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 feline-*.tar
 
-# Environment variables
+# Local environment secrets.
 .env
 
+# Example client dependencies.
+node_modules/

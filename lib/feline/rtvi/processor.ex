@@ -1,114 +1,109 @@
 defmodule Feline.RTVI.Processor do
   @moduledoc """
-  Processor that handles inbound RTVI protocol messages.
+  Handles inbound RTVI protocol messages from pipecat clients
+  (`@pipecat-ai/client-js` and friends). Place near the top of the pipeline,
+  right after the transport input.
 
-  Place early in the pipeline (before STT/LLM/TTS). Intercepts
-  `InputTransportMessageFrame` with `label: "rtvi-ai"` and converts
-  them to the appropriate pipeline frames.
-
-  Handled message types:
-  - `client-ready` — triggers `bot-ready` response
-  - `send-text` — pushes `LLMMessagesAppendFrame`
-  - `disconnect-bot` — pushes `EndFrame`
-  - `llm-function-call-result` — pushes `FunctionCallResultFrame`
+  Handles: `client-ready` (responds `bot-ready`), `send-text` (interrupts and
+  appends a user message), `llm-function-call-result`, `disconnect-bot`.
+  Unknown types get an `error-response`.
   """
+
   use Feline.Processor
 
-  alias Feline.Frame
-  alias Feline.RTVI.Messages
-
-  alias Feline.Frames.{
+  alias Feline.Frames.All.{
     EndFrame,
+    ErrorFrame,
     FunctionCallResultFrame,
     InputTransportMessageFrame,
+    InterruptionFrame,
     LLMMessagesAppendFrame,
-    OutputTransportMessageFrame,
-    StartFrame
+    OutputTransportMessageUrgentFrame
   }
 
-  @rtvi_label "rtvi-ai"
+  require Logger
+
+  @protocol_version "2.0.0"
+  @label "rtvi-ai"
 
   @impl true
-  def init(_opts) do
-    {:ok, %{pipeline_started: false, client_ready: false}}
-  end
+  def init(_opts), do: {:ok, %{}}
 
   @impl true
-  def handle_frame(%StartFrame{} = frame, :downstream, push_fn, state) do
-    state = %{state | pipeline_started: true}
-
-    if state.client_ready do
-      push_fn.(
-        %OutputTransportMessageFrame{id: Frame.new_id(), payload: Messages.bot_ready()},
-        :downstream
-      )
+  def handle_frame(%InputTransportMessageFrame{message: message}, :downstream, _ctx, state) do
+    case message do
+      %{"label" => @label, "type" => type} -> handle_message(type, message, state)
+      _other -> {:ok, state}
     end
-
-    {:push, frame, :downstream, state}
   end
 
-  def handle_frame(
-        %InputTransportMessageFrame{payload: %{"label" => @rtvi_label} = payload},
-        :downstream,
-        push_fn,
-        state
-      ) do
-    handle_rtvi_message(payload["type"], payload, push_fn, state)
+  def handle_frame(%ErrorFrame{} = frame, :upstream, _ctx, state) do
+    error_message = %{
+      "label" => @label,
+      "type" => "error",
+      "data" => %{"error" => to_string(frame.error), "fatal" => frame.fatal}
+    }
+
+    {:push_many,
+     [{frame, :upstream}, {%OutputTransportMessageUrgentFrame{message: error_message}, :downstream}],
+     state}
   end
 
-  def handle_frame(frame, direction, _push_fn, state) do
-    {:push, frame, direction, state}
+  def handle_frame(frame, direction, _ctx, state), do: {:push, frame, direction, state}
+
+  defp handle_message("client-ready", message, state) do
+    Logger.info("RTVI client ready: #{inspect(message["data"])}")
+
+    bot_ready = %{
+      "label" => @label,
+      "type" => "bot-ready",
+      "id" => message["id"] || "",
+      "data" => %{
+        "version" => @protocol_version,
+        "about" => %{"library" => "feline", "library_version" => "0.1.0"}
+      }
+    }
+
+    {:push, %OutputTransportMessageUrgentFrame{message: bot_ready}, :downstream, state}
   end
 
-  defp handle_rtvi_message("client-ready", _payload, push_fn, state) do
-    state = %{state | client_ready: true}
+  defp handle_message("send-text", %{"data" => %{"content" => content}}, state) do
+    append = %LLMMessagesAppendFrame{
+      messages: [%{"role" => "user", "content" => content}],
+      run_llm: true
+    }
 
-    if state.pipeline_started do
-      push_fn.(
-        %OutputTransportMessageFrame{id: Frame.new_id(), payload: Messages.bot_ready()},
-        :downstream
-      )
-    end
-
-    {:ok, state}
+    {:push_many,
+     [
+       {%InterruptionFrame{}, :downstream},
+       {%InterruptionFrame{}, :upstream},
+       {append, :downstream}
+     ], state}
   end
 
-  defp handle_rtvi_message("send-text", payload, push_fn, state) do
-    text = get_in(payload, ["data", "text"]) || ""
+  defp handle_message("llm-function-call-result", %{"data" => data}, state) do
+    result = %FunctionCallResultFrame{
+      function_name: data["function_name"],
+      tool_call_id: data["tool_call_id"],
+      arguments: data["arguments"] || %{},
+      result: data["result"]
+    }
 
-    push_fn.(
-      %LLMMessagesAppendFrame{
-        id: Frame.new_id(),
-        messages: [%{"role" => "user", "content" => text}]
-      },
-      :downstream
-    )
-
-    {:ok, state}
+    {:push, result, :downstream, state}
   end
 
-  defp handle_rtvi_message("disconnect-bot", _payload, push_fn, state) do
-    push_fn.(%EndFrame{id: Frame.new_id()}, :downstream)
-    {:ok, state}
+  defp handle_message("disconnect-bot", _message, state) do
+    {:push, %EndFrame{}, :downstream, state}
   end
 
-  defp handle_rtvi_message("llm-function-call-result", payload, push_fn, state) do
-    data = payload["data"] || %{}
+  defp handle_message(type, message, state) do
+    error_response = %{
+      "label" => @label,
+      "type" => "error-response",
+      "id" => message["id"] || "",
+      "data" => %{"error" => "Unsupported type #{type}"}
+    }
 
-    push_fn.(
-      %FunctionCallResultFrame{
-        id: Frame.new_id(),
-        function_name: data["function_name"],
-        tool_call_id: data["tool_call_id"],
-        result: data["result"]
-      },
-      :downstream
-    )
-
-    {:ok, state}
-  end
-
-  defp handle_rtvi_message(_type, _payload, _push_fn, state) do
-    {:ok, state}
+    {:push, %OutputTransportMessageUrgentFrame{message: error_response}, :downstream, state}
   end
 end

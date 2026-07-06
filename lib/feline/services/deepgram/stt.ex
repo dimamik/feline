@@ -1,84 +1,102 @@
 defmodule Feline.Services.Deepgram.STT do
   @moduledoc """
-  Deepgram speech-to-text service. Streams audio to Deepgram's WebSocket
-  API and produces TranscriptionFrame results.
+  Streaming speech-to-text over Deepgram's websocket API. Input audio is
+  forwarded to Deepgram as it flows through; results come back as
+  `TranscriptionFrame` (final) / `InterimTranscriptionFrame` pushed
+  downstream. Audio passes through untouched.
 
-  This is a simplified implementation that buffers audio and sends it
-  in chunks via REST for initial validation. A full implementation would
-  use Deepgram's streaming WebSocket API.
+  Options: `:api_key` (defaults to `DEEPGRAM_API_KEY`), `:url` (override for
+  tests/self-hosting), `:model` (default `nova-2`).
   """
-  use Feline.Services.STT
 
-  alias Feline.Frames.TranscriptionFrame
+  use Feline.Processor
 
-  @default_model "nova-2"
-  @default_language "en"
+  alias Feline.WebSocketClient
 
-  @impl Feline.Processor
+  alias Feline.Frames.All.{
+    InputAudioRawFrame,
+    InterimTranscriptionFrame,
+    TranscriptionFrame
+  }
+
+  require Logger
+
+  @impl true
   def init(opts) do
     {:ok,
      %{
-       api_key: Keyword.fetch!(opts, :api_key),
-       model: Keyword.get(opts, :model, @default_model),
-       language: Keyword.get(opts, :language, @default_language),
-       buffer: <<>>,
-       buffer_size: Keyword.get(opts, :buffer_size, 32_000),
-       sample_rate: Keyword.get(opts, :sample_rate, 16_000)
+       api_key: Keyword.get(opts, :api_key) || System.get_env("DEEPGRAM_API_KEY"),
+       url: Keyword.get(opts, :url),
+       model: Keyword.get(opts, :model, "nova-2"),
+       client: nil
      }}
   end
 
-  @impl Feline.Services.STT
-  def run_stt(audio, state) do
-    buffer = state.buffer <> audio
+  @impl true
+  def handle_setup(start_frame, _ctx, state) do
+    query =
+      URI.encode_query(
+        encoding: "linear16",
+        sample_rate: start_frame.audio_in_sample_rate,
+        channels: 1,
+        model: state.model,
+        interim_results: true,
+        punctuate: true
+      )
 
-    if byte_size(buffer) >= state.buffer_size do
-      case transcribe(buffer, state) do
-        {:ok, text} ->
-          frame = %TranscriptionFrame{
-            id: make_ref(),
-            text: text,
-            language: state.language
-          }
+    url = state.url || "wss://api.deepgram.com/v1/listen?#{query}"
 
-          {:ok, [frame], %{state | buffer: <<>>}}
+    {:ok, client} =
+      WebSocketClient.start_link(url, headers: [{"authorization", "Token #{state.api_key}"}])
 
-        {:error, _reason} ->
-          {:continue, %{state | buffer: <<>>}}
-      end
-    else
-      {:continue, %{state | buffer: buffer}}
-    end
+    {:ok, %{state | client: client}}
   end
 
-  defp transcribe(audio, state) do
-    url =
-      "https://api.deepgram.com/v1/listen?" <>
-        URI.encode_query(model: state.model, language: state.language)
-
-    case Req.post(url,
-           body: audio,
-           headers: [
-             {"authorization", "Token #{state.api_key}"},
-             {"content-type",
-              "audio/raw;encoding=linear16;sample_rate=#{state.sample_rate};channels=1"}
-           ]
-         ) do
-      {:ok, %{status: 200, body: body}} ->
-        text =
-          body
-          |> get_in(["results", "channels"])
-          |> List.first(%{})
-          |> Map.get("alternatives", [])
-          |> List.first(%{})
-          |> Map.get("transcript", "")
-
-        {:ok, text}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, "Deepgram API error (#{status}): #{inspect(body)}"}
-
-      {:error, error} ->
-        {:error, "Deepgram request failed: #{inspect(error)}"}
-    end
+  @impl true
+  def handle_frame(%InputAudioRawFrame{} = frame, :downstream, _ctx, state) do
+    WebSocketClient.send_frame(state.client, {:binary, frame.audio})
+    {:push, frame, :downstream, state}
   end
+
+  def handle_frame(frame, direction, _ctx, state), do: {:push, frame, direction, state}
+
+  @impl true
+  def handle_info({:websocket_frame, _client, {:text, json}}, ctx, state) do
+    case Jason.decode(json) do
+      {:ok,
+       %{
+         "channel" => %{"alternatives" => [%{"transcript" => transcript} | _rest]},
+         "is_final" => final?
+       }}
+      when transcript != "" ->
+        frame_module = if final?, do: TranscriptionFrame, else: InterimTranscriptionFrame
+
+        frame =
+          struct!(frame_module,
+            text: transcript,
+            timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+          )
+
+        ctx.push.(frame, :downstream)
+
+      _other ->
+        :ok
+    end
+
+    {:ok, state}
+  end
+
+  def handle_info({:websocket_closed, _client, reason}, _ctx, state) do
+    Logger.warning("Deepgram connection closed: #{inspect(reason)}")
+    {:ok, %{state | client: nil}}
+  end
+
+  def handle_info(_message, _ctx, state), do: {:ok, state}
+
+  @impl true
+  def handle_cleanup(%{client: client}) when is_pid(client) do
+    if Process.alive?(client), do: WebSocketClient.close(client)
+  end
+
+  def handle_cleanup(_state), do: :ok
 end
